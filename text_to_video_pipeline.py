@@ -1,7 +1,7 @@
 from diffusers import StableDiffusionPipeline
 import torch
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Union, Tuple
 import numpy as np
 from diffusers.utils import deprecate, logging, BaseOutput
 from einops import rearrange, repeat
@@ -16,15 +16,18 @@ from PIL import Image
 from kornia.morphology import dilation
 
 
-@dataclass
+@dataclass  
 class TextToVideoPipelineOutput(BaseOutput):
     # videos: Union[torch.Tensor, np.ndarray]
     # code: Union[torch.Tensor, np.ndarray]
     images: Union[List[PIL.Image.Image], np.ndarray]
-    nsfw_content_detected: Optional[List[bool]]
+    nsfw_content_detected: Optional[List[bool]] # not safe for work 
+ 
 
-
-def coords_grid(batch, ht, wd, device):
+def coords_grid(batch: int, ht: int, wd: int, device: torch.device) -> torch.Tensor:
+    """ 
+    create a coordinate grid of shape (batch, 2, ht, wd)
+    """
     # Adapted from https://github.com/princeton-vl/RAFT/blob/master/core/utils/utils.py
     coords = torch.meshgrid(torch.arange(
         ht, device=device), torch.arange(wd, device=device))
@@ -47,8 +50,21 @@ class TextToVideoPipeline(StableDiffusionPipeline):
         super().__init__(vae, text_encoder, tokenizer, unet, scheduler,
                          safety_checker, feature_extractor, requires_safety_checker)
 
-    def DDPM_forward(self, x0, t0, tMax, generator, device, shape, text_embeddings):
+    def DDPM_forward(self, 
+                     x0: Optional[torch.Tensor], 
+                     t0: int, 
+                     tMax: int, 
+                     generator: torch.Generator,
+                     device: torch.device, 
+                     shape: Tuple[int, ...], 
+                     text_embeddings: torch.Tensor) -> torch.Tensor:
         rand_device = "cpu" if device.type == "mps" else device
+        """ 
+        Perform a forward pass of the Denoising Diffusion Probabilistic Models (DDPM).
+        
+        Returns:
+        torch.Tensor: The denoised data or a batch of random noise if no original data is provided.
+        """
 
         if x0 is None:
             return torch.randn(shape, generator=generator, device=rand_device, dtype=text_embeddings.dtype).to(device)
@@ -61,7 +77,16 @@ class TextToVideoPipeline(StableDiffusionPipeline):
                 torch.sqrt(1-alpha_vec) * eps
             return xt
 
-    def prepare_latents(self, batch_size, num_channels_latents, video_length, height, width, dtype, device, generator, latents=None):
+    def prepare_latents(self, 
+                        batch_size: int, 
+                        num_channels_latents: int, 
+                        video_length: int, 
+                        height: int, 
+                        width: int, 
+                        dtype: torch.dtype, 
+                        device: torch.device, 
+                        generator: Union[torch.Generator, List[torch.Generator]], 
+                        latents: Optional[torch.Tensor] = None) -> torch.Tensor:
         shape = (batch_size, num_channels_latents, video_length, height //
                  self.vae_scale_factor, width // self.vae_scale_factor)
         if isinstance(generator, list) and len(generator) != batch_size:
